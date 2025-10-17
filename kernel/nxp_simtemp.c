@@ -6,14 +6,29 @@
 #include <linux/hrtimer.h>
 #include <linux/ktime.h>
 #include <linux/workqueue.h>
+#include <linux/spinlock.h>
+#include <linux/wait.h>
+#include <linux/slab.h>
 
 #define DRIVER_NAME "nxp_simtemp"
 #define DEV_NAME    "simtemp"
+
+struct simtemp_sample {
+    __u64 timestamp_ns;
+    __s32 temp_mC;
+    __u32 flags;
+} __attribute__((packed));
 
 struct nxp_simtemp_dev {
     struct miscdevice misc;
     struct hrtimer timer;
     struct work_struct work;
+    spinlock_t lock;
+    wait_queue_head_t wq;
+    struct simtemp_sample *buffer;
+    unsigned int buf_size;
+    unsigned int head;
+    unsigned int tail;
     unsigned int sampling_ms;
     s32 threshold_mC;
     bool running;
@@ -21,12 +36,38 @@ struct nxp_simtemp_dev {
 
 static struct nxp_simtemp_dev *gdev;
 
+static inline bool buf_empty(struct nxp_simtemp_dev *dev)
+{
+    return dev->head == dev->tail;
+}
+
 static void simtemp_work_func(struct work_struct *work)
 {
     struct nxp_simtemp_dev *dev = container_of(work, struct nxp_simtemp_dev, work);
-    int temp_mC = 40000 + (get_random_u32() % 8000) - 4000; // 40°C ±4°C
-    pr_info(DRIVER_NAME ": new sample = %d m°C\n", temp_mC);
+    struct simtemp_sample s;
+    unsigned long flags;
+    ktime_t now = ktime_get();
+
+    s.timestamp_ns = ktime_to_ns(now);
+    s.temp_mC = 40000 + (get_random_u32() % 8000) - 4000;
+    s.flags = 1;
+
+    if (s.temp_mC > dev->threshold_mC)
+        s.flags |= 2;
+
+    spin_lock_irqsave(&dev->lock, flags);
+    dev->buffer[dev->head] = s;
+    dev->head = (dev->head + 1) % dev->buf_size;
+    if (dev->head == dev->tail)
+        dev->tail = (dev->tail + 1) % dev->buf_size;
+    spin_unlock_irqrestore(&dev->lock, flags);
+
+    wake_up_interruptible(&dev->wq);
+
+    pr_info(DRIVER_NAME ": new sample = %d m°C flags=0x%x (head=%u, tail=%u)\n",
+            s.temp_mC, s.flags, dev->head, dev->tail);
 }
+
 
 static enum hrtimer_restart simtemp_timer_cb(struct hrtimer *t)
 {
@@ -56,8 +97,17 @@ static int __init nxp_simtemp_init(void)
     if (!gdev)
         return -ENOMEM;
 
+    gdev->buf_size = 64;
+    gdev->buffer = kcalloc(gdev->buf_size, sizeof(struct simtemp_sample), GFP_KERNEL);
+    if (!gdev->buffer)
+        return -ENOMEM;
+
+    spin_lock_init(&gdev->lock);
+    init_waitqueue_head(&gdev->wq);
     INIT_WORK(&gdev->work, simtemp_work_func);
+
     gdev->sampling_ms = 1000;
+    gdev->threshold_mC = 43000; 
     gdev->running = true;
 
     hrtimer_init(&gdev->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
@@ -71,7 +121,7 @@ static int __init nxp_simtemp_init(void)
     if (ret)
         return ret;
 
-    pr_info(DRIVER_NAME ": /dev/%s ready\n", DEV_NAME);
+    pr_info(DRIVER_NAME ": registered /dev/%s\n", DEV_NAME);
     return 0;
 }
 
@@ -81,6 +131,7 @@ static void __exit nxp_simtemp_exit(void)
     hrtimer_cancel(&gdev->timer);
     cancel_work_sync(&gdev->work);
     misc_deregister(&gdev->misc);
+    kfree(gdev->buffer);
     kfree(gdev);
     pr_info(DRIVER_NAME ": unregistered\n");
 }

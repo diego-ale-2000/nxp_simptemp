@@ -9,6 +9,7 @@
 #include <linux/spinlock.h>
 #include <linux/wait.h>
 #include <linux/slab.h>
+#include <linux/device.h>  // para sysfs
 
 #define DRIVER_NAME "nxp_simtemp"
 #define DEV_NAME    "simtemp"
@@ -32,9 +33,57 @@ struct nxp_simtemp_dev {
     unsigned int sampling_ms;
     s32 threshold_mC;
     bool running;
+
+    struct kobject *kobj;
 };
 
 static struct nxp_simtemp_dev *gdev;
+
+/* ================== Sysfs handlers ================== */
+
+static ssize_t sampling_ms_show(struct kobject *kobj,
+                                struct kobj_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%u\n", gdev->sampling_ms);
+}
+
+static ssize_t sampling_ms_store(struct kobject *kobj,
+                                 struct kobj_attribute *attr,
+                                 const char *buf, size_t count)
+{
+    unsigned int val;
+    if (kstrtouint(buf, 10, &val))
+        return -EINVAL;
+    if (val == 0)
+        return -EINVAL;
+
+    gdev->sampling_ms = val;
+    return count;
+}
+
+static ssize_t threshold_mC_show(struct kobject *kobj,
+                                 struct kobj_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d\n", gdev->threshold_mC);
+}
+
+static ssize_t threshold_mC_store(struct kobject *kobj,
+                                  struct kobj_attribute *attr,
+                                  const char *buf, size_t count)
+{
+    s32 val;
+    if (kstrtos32(buf, 10, &val))
+        return -EINVAL;
+    gdev->threshold_mC = val;
+    return count;
+}
+
+static struct kobj_attribute sampling_ms_attr =
+    __ATTR(sampling_ms, 0664, sampling_ms_show, sampling_ms_store);
+static struct kobj_attribute threshold_mC_attr =
+    __ATTR(threshold_mC, 0664, threshold_mC_show, threshold_mC_store);
+
+/* ==================================================== */
 
 static inline bool buf_empty(struct nxp_simtemp_dev *dev)
 {
@@ -51,7 +100,6 @@ static void simtemp_work_func(struct work_struct *work)
     s.timestamp_ns = ktime_to_ns(now);
     s.temp_mC = 40000 + (get_random_u32() % 8000) - 4000;
     s.flags = 1;
-
     if (s.temp_mC > dev->threshold_mC)
         s.flags |= 2;
 
@@ -67,7 +115,6 @@ static void simtemp_work_func(struct work_struct *work)
     pr_info(DRIVER_NAME ": new sample = %d m°C flags=0x%x (head=%u, tail=%u)\n",
             s.temp_mC, s.flags, dev->head, dev->tail);
 }
-
 
 static enum hrtimer_restart simtemp_timer_cb(struct hrtimer *t)
 {
@@ -107,8 +154,21 @@ static int __init nxp_simtemp_init(void)
     INIT_WORK(&gdev->work, simtemp_work_func);
 
     gdev->sampling_ms = 1000;
-    gdev->threshold_mC = 43000; 
+    gdev->threshold_mC = 45000;
     gdev->running = true;
+
+    /* Sysfs kobject */
+    gdev->kobj = kobject_create_and_add("simtemp", kernel_kobj);
+    if (!gdev->kobj)
+        return -ENOMEM;
+
+    ret = sysfs_create_file(gdev->kobj, &sampling_ms_attr.attr);
+    if (ret)
+        return ret;
+
+    ret = sysfs_create_file(gdev->kobj, &threshold_mC_attr.attr);
+    if (ret)
+        return ret;
 
     hrtimer_init(&gdev->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     gdev->timer.function = simtemp_timer_cb;
@@ -130,7 +190,12 @@ static void __exit nxp_simtemp_exit(void)
     gdev->running = false;
     hrtimer_cancel(&gdev->timer);
     cancel_work_sync(&gdev->work);
+
     misc_deregister(&gdev->misc);
+
+    if (gdev->kobj)
+        kobject_put(gdev->kobj);
+
     kfree(gdev->buffer);
     kfree(gdev);
     pr_info(DRIVER_NAME ": unregistered\n");
@@ -141,5 +206,5 @@ module_exit(nxp_simtemp_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Diego Delgado");
-MODULE_DESCRIPTION("NXP simulated temperature sensor");
-MODULE_VERSION("0.1");
+MODULE_DESCRIPTION("NXP simulated temperature sensor with sysfs control");
+MODULE_VERSION("0.2");

@@ -126,15 +126,77 @@ static enum hrtimer_restart simtemp_timer_cb(struct hrtimer *t)
     return HRTIMER_RESTART;
 }
 
+/* ================== File Operations ================== */
 static int simtemp_open(struct inode *inode, struct file *filp)
 {
     filp->private_data = gdev;
     return 0;
 }
 
+static ssize_t simtemp_read(struct file *filp, char __user *buf,
+                            size_t count, loff_t *off)
+{
+    struct nxp_simtemp_dev *dev = filp->private_data;
+    ssize_t ret = 0;
+    unsigned long flags;
+
+    if (count < sizeof(struct simtemp_sample))
+        return -EINVAL;
+
+    spin_lock_irqsave(&dev->lock, flags);
+    if (buf_empty(dev)) {
+        spin_unlock_irqrestore(&dev->lock, flags);
+        if (filp->f_flags & O_NONBLOCK)
+            return -EAGAIN;
+
+        if (wait_event_interruptible(dev->wq, !buf_empty(dev)))
+            return -ERESTARTSYS;
+
+        spin_lock_irqsave(&dev->lock, flags);
+    }
+
+    if (copy_to_user(buf, &dev->buffer[dev->tail], sizeof(struct simtemp_sample)))
+        ret = -EFAULT;
+    else
+        ret = sizeof(struct simtemp_sample);
+
+    dev->tail = (dev->tail + 1) % dev->buf_size;
+    spin_unlock_irqrestore(&dev->lock, flags);
+
+    return ret;
+}
+
+#include <linux/poll.h>
+
+static unsigned int simtemp_poll(struct file *filp, poll_table *wait)
+{
+    struct nxp_simtemp_dev *dev = filp->private_data;
+    unsigned int mask = 0;
+    unsigned long flags;
+
+    poll_wait(filp, &dev->wq, wait);
+
+    spin_lock_irqsave(&dev->lock, flags);
+
+    if (!buf_empty(dev))
+        mask |= POLLIN | POLLRDNORM; 
+
+    if (dev->head != dev->tail) {
+        struct simtemp_sample *s = &dev->buffer[dev->tail];
+        if (s->flags & 2)
+            mask |= POLLPRI;
+    }
+
+    spin_unlock_irqrestore(&dev->lock, flags);
+
+    return mask;
+}
+
 static const struct file_operations simtemp_fops = {
     .owner = THIS_MODULE,
     .open  = simtemp_open,
+    .read  = simtemp_read,
+    .poll  = simtemp_poll
 };
 
 static int __init nxp_simtemp_init(void)
@@ -185,6 +247,7 @@ static int __init nxp_simtemp_init(void)
     return 0;
 }
 
+/* ==================================================== */
 static void __exit nxp_simtemp_exit(void)
 {
     gdev->running = false;

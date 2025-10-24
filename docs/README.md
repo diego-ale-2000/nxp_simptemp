@@ -4,6 +4,10 @@ Simulated temperature sensor implemented as a Linux kernel platform driver with 
 
 ---
 
+## Author
+
+Diego Alejandro Delgado González
+
 ## Features
 
 - Simulates temperature in three modes: `normal`, `noisy`, `ramp`.
@@ -133,8 +137,3 @@ From the project root (`~/simtemp`):
 ```
 ---
 
-
-## Links
-
-- Git repository: [https://github.com/diego-ale-2000/nxp_simptemp.git](https://github.com/diego-ale-2000/nxp_simptemp.git)
-- Demo video: [https://youtu.be/gBwWEoxVkeA](https://youtu.be/gBwWEoxVkeA)

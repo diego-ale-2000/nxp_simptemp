@@ -99,7 +99,7 @@ def run_test():
     print("🚀 Running device test mode...")
     
     test_mode = "noisy"
-    test_threshold = 41000 
+    test_threshold = 39000 
     test_sampling = 500   
     
     write_sysfs(os.path.join(SYSFS_BASE, "mode"), test_mode)
@@ -113,7 +113,8 @@ def run_test():
     poller = select.poll()
     poller.register(fd, select.POLLIN | select.POLLPRI)
 
-    timeout = 10 
+    timeout = 2 * (test_sampling / 1000.0)
+
     start = time.time()
     success = False
     

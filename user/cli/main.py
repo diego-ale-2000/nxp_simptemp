@@ -78,22 +78,44 @@ def live_poll():
     finally:
         os.close(fd)
 
+def set_threshold(value):
+    path = os.path.join(SYSFS_BASE, "threshold_mC")
+    print(f"Setting threshold to {value} m°C...")
+    if write_sysfs(path, value):
+        print(f"Threshold set to: {read_sysfs(path)}")
+    else:
+        print("Failed to set threshold.")
+
+
+def set_sampling(value):
+    path = os.path.join(SYSFS_BASE, "sampling_ms")
+    print(f"Setting sampling interval to {value} ms...")
+    if write_sysfs(path, value):
+        print(f"Sampling interval set to: {read_sysfs(path)} ms")
+    else:
+        print("Failed to set sampling interval.")
 
 
 def main():
     parser = argparse.ArgumentParser(description="CLI for nxp_simtemp device")
     parser.add_argument("--mode", help="Set device mode (normal, noisy, ramp)")
     parser.add_argument("--stats", action="store_true", help="Show stats and exit")
+    parser.add_argument("--threshold", type=int, help="Set threshold in m°C")
+    parser.add_argument("--sampling", type=int, help="Set sampling interval in ms")
     args = parser.parse_args()
 
+    # Apply settings
     if args.mode:
         set_mode(args.mode)
-        return
+    if args.threshold is not None:
+        set_threshold(args.threshold)
+    if args.sampling is not None:
+        set_sampling(args.sampling)
 
     if args.stats:
         print_stats()
         return
-
+    
     # Default action: live poll
     live_poll()
 

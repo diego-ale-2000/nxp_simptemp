@@ -1,0 +1,9 @@
+# requirements.txt
+# Python dependencies for nxp_simtemp CLI tool
+
+# Minimum Python version required
+python_version >= 3.9
+
+# No external packages are required — only standard library modules are used:
+# - os, sys, select, struct, time, argparse: core system utilities
+# - datetime, zoneinfo: time handling (ZoneInfo requires Python 3.9+)

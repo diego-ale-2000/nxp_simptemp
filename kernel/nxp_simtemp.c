@@ -1,54 +1,14 @@
 #include <linux/module.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
-#include <linux/miscdevice.h>
 #include <linux/fs.h>
-#include <linux/hrtimer.h>
-#include <linux/ktime.h>
-#include <linux/workqueue.h>
-#include <linux/spinlock.h>
-#include <linux/wait.h>
+#include <linux/of.h>
+#include <linux/random.h>
 #include <linux/slab.h>
 #include <linux/device.h>
 #include <linux/poll.h>
-#include <linux/random.h>
-#include <linux/platform_device.h>
-#include <linux/of.h>
 
-#define DRIVER_NAME "nxp_simtemp"
-#define DEV_NAME "simtemp"
-
-struct simtemp_sample {
-    __u64 timestamp_ns;
-    __s32 temp_mC;
-    __u32 flags;
-} __attribute__((packed));
-
-struct nxp_simtemp_dev {
-    struct miscdevice misc;
-    struct hrtimer timer;
-    struct work_struct work;
-    spinlock_t lock;
-    wait_queue_head_t wq;
-    struct simtemp_sample *buffer;
-    unsigned int buf_size;
-    unsigned int head;
-    unsigned int tail;
-    unsigned int sampling_ms;
-    s32 threshold_mC;
-    bool running;
-
-    char mode[16];       
-    struct {
-        u32 updates;
-        u32 alerts;
-        u32 last_error;
-    } stats;
-
-    struct kobject *kobj;
-    struct platform_device *pdev;
-};
-
+#include "nxp_simtemp.h"
 
 static struct nxp_simtemp_dev *gdev;
 

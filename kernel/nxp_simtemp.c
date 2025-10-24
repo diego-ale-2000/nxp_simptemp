@@ -12,7 +12,18 @@
 
 static struct nxp_simtemp_dev *gdev;
 
-/* ================== Sysfs handlers ================== */
+/* ============================================================
+ *                 SYSFS ATTRIBUTE HANDLERS
+ * ============================================================
+ * Each handler allows user-space to read or modify driver
+ * configuration via /sys/class/misc/simtemp/
+ * Attributes:
+ *   - sampling_ms
+ *   - threshold_mC
+ *   - mode
+ *   - stats
+ * ============================================================ */
+
 static ssize_t sampling_ms_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
     return sprintf(buf, "%u\n", gdev->sampling_ms);
@@ -57,6 +68,7 @@ static ssize_t mode_store(struct kobject *kobj, struct kobj_attribute *attr,
     strncpy(tmp, buf, sizeof(tmp) - 1);
     tmp[sizeof(tmp) - 1] = '\0';
 
+    /* Accept only valid mode strings */
     if (strncmp(tmp, "normal", 16) != 0 &&
         strncmp(tmp, "noisy", 16) != 0 &&
         strncmp(tmp, "ramp", 16) != 0)
@@ -66,7 +78,7 @@ static ssize_t mode_store(struct kobject *kobj, struct kobj_attribute *attr,
     return count;
 }
 
-
+/* Read-only system statistics: updates, alerts, and errors */
 static ssize_t stats_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf)
 {
     return sprintf(buf, "updates=%u alerts=%u last_error=%u\n",
@@ -75,17 +87,23 @@ static ssize_t stats_show(struct kobject *kobj, struct kobj_attribute *attr, cha
                    gdev->stats.last_error);
 }
 
+/* Sysfs attributes registration */
 static struct kobj_attribute sampling_ms_attr = __ATTR(sampling_ms, 0664, sampling_ms_show, sampling_ms_store);
 static struct kobj_attribute threshold_mC_attr = __ATTR(threshold_mC, 0664, threshold_mC_show, threshold_mC_store);
 static struct kobj_attribute mode_attr = __ATTR(mode, 0664, mode_show, mode_store);
 static struct kobj_attribute stats_attr = __ATTR(stats, 0444, stats_show, NULL);
 
-/* ==================================================== */
+/* ============================================================
+ *                 SAMPLE GENERATION WORK FUNCTION
+ * ============================================================ */
+
 static inline bool buf_empty(struct nxp_simtemp_dev *dev)
 {
     return dev->head == dev->tail;
 }
 
+/* Called periodically by the hrtimer callback (via workqueue).
+ * Simulates a new temperature sample based on current mode. */
 static void simtemp_work_func(struct work_struct *work)
 {
     struct nxp_simtemp_dev *dev = container_of(work, struct nxp_simtemp_dev, work);
@@ -95,23 +113,27 @@ static void simtemp_work_func(struct work_struct *work)
 
     s.timestamp_ns = ktime_to_ns(now);
 
+    /* Generate simulated temperature according to selected mode */
     if (strcmp(dev->mode, "ramp") == 0) {
         static int ramp = RAMP_START_MILLIC;
         ramp += RAMP_STEP_MILLIC;
-        if (ramp > RAMP_MAX_MILLIC) ramp = RAMP_START_MILLIC;
+        if (ramp > RAMP_MAX_MILLIC)
+            ramp = RAMP_START_MILLIC;
         s.temp_mC = ramp;
 
     } else if (strcmp(dev->mode, "noisy") == 0) {
         s.temp_mC = NOISY_MEAN_MILLIC + (get_random_u32() % (2 * NOISY_DELTA_MILLIC)) - NOISY_DELTA_MILLIC;
 
-    } else { // normal mode
+    } else { /* Normal mode */
         s.temp_mC = NORMAL_MEAN_MILLIC + (get_random_u32() % (2 * NORMAL_DELTA_MILLIC)) - NORMAL_DELTA_MILLIC;
     }
 
+    /* Set flag bits */
     s.flags = 1;
     if (s.temp_mC > dev->threshold_mC)
         s.flags |= 2;
 
+    /* Store sample in circular buffer (protected by spinlock) */
     spin_lock_irqsave(&dev->lock, flags);
     dev->buffer[dev->head] = s;
     dev->head = (dev->head + 1) % dev->buf_size;
@@ -123,13 +145,18 @@ static void simtemp_work_func(struct work_struct *work)
         dev->stats.alerts++;
     spin_unlock_irqrestore(&dev->lock, flags);
 
+    /* Wake up any blocking readers */
     wake_up_interruptible(&dev->wq);
 
     pr_info(DRIVER_NAME ": new sample = %d m°C flags=0x%x (head=%u, tail=%u)\n",
             s.temp_mC, s.flags, dev->head, dev->tail);
 }
 
-
+/* ============================================================
+ *                 HIGH-RESOLUTION TIMER CALLBACK
+ * ============================================================
+ * Triggers the sample generation work periodically.
+ * ============================================================ */
 static enum hrtimer_restart simtemp_timer_cb(struct hrtimer *t)
 {
     struct nxp_simtemp_dev *dev = container_of(t, struct nxp_simtemp_dev, timer);
@@ -142,7 +169,12 @@ static enum hrtimer_restart simtemp_timer_cb(struct hrtimer *t)
     return HRTIMER_RESTART;
 }
 
-/* ================== File Operations ================== */
+/* ============================================================
+ *                 CHARACTER DEVICE INTERFACE
+ * ============================================================
+ * Exposes /dev/simtemp for user-space reads and polling.
+ * ============================================================ */
+
 static int simtemp_open(struct inode *inode, struct file *filp)
 {
     filp->private_data = gdev;
@@ -158,6 +190,7 @@ static ssize_t simtemp_read(struct file *filp, char __user *buf, size_t count, l
     if (count < sizeof(struct simtemp_sample))
         return -EINVAL;
 
+    /* Wait for data if buffer is empty */
     spin_lock_irqsave(&dev->lock, flags);
     if (buf_empty(dev)) {
         spin_unlock_irqrestore(&dev->lock, flags);
@@ -168,16 +201,19 @@ static ssize_t simtemp_read(struct file *filp, char __user *buf, size_t count, l
         spin_lock_irqsave(&dev->lock, flags);
     }
 
+    /* Copy sample to user space */
     if (copy_to_user(buf, &dev->buffer[dev->tail], sizeof(struct simtemp_sample)))
         ret = -EFAULT;
     else
         ret = sizeof(struct simtemp_sample);
 
+    /* Update tail pointer */
     dev->tail = (dev->tail + 1) % dev->buf_size;
     spin_unlock_irqrestore(&dev->lock, flags);
     return ret;
 }
 
+/* Support poll() and select() system calls for async user-space I/O */
 static unsigned int simtemp_poll(struct file *filp, poll_table *wait)
 {
     struct nxp_simtemp_dev *dev = filp->private_data;
@@ -206,13 +242,17 @@ static const struct file_operations simtemp_fops = {
     .poll  = simtemp_poll,
 };
 
-/* ================== Platform driver ================== */
+/* ============================================================
+ *                 PLATFORM DRIVER IMPLEMENTATION
+ * ============================================================ */
+
 static int nxp_simtemp_probe(struct platform_device *pdev)
 {
     int ret;
 
     pr_info(DRIVER_NAME ": probe called\n");
 
+    /* Allocate and initialize driver context */
     gdev = kzalloc(sizeof(*gdev), GFP_KERNEL);
     if (!gdev)
         return -ENOMEM;
@@ -231,18 +271,19 @@ static int nxp_simtemp_probe(struct platform_device *pdev)
     gdev->sampling_ms = 1000;
     gdev->threshold_mC = 45000;
     gdev->running = true;
-
     strscpy(gdev->mode, "normal", sizeof(gdev->mode));
+
+    /* Initialize stats */
     gdev->stats.updates = 0;
     gdev->stats.alerts = 0;
     gdev->stats.last_error = 0;
 
-    /* Timer */
+    /* Configure and start timer */
     hrtimer_init(&gdev->timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL);
     gdev->timer.function = simtemp_timer_cb;
     hrtimer_start(&gdev->timer, ms_to_ktime(gdev->sampling_ms), HRTIMER_MODE_REL);
 
-    /* Misc device */
+    /* Register misc device under /dev/simtemp */
     gdev->misc.minor = MISC_DYNAMIC_MINOR;
     gdev->misc.name = DEV_NAME;
     gdev->misc.fops = &simtemp_fops;
@@ -253,56 +294,45 @@ static int nxp_simtemp_probe(struct platform_device *pdev)
         return ret;
     }
 
-    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &sampling_ms_attr.attr);
-    if (ret)
-        dev_warn(&pdev->dev, "failed to create sampling_ms sysfs file\n");
-
-    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &threshold_mC_attr.attr);
-    if (ret)
-        dev_warn(&pdev->dev, "failed to create threshold_mC sysfs file\n");
-
-    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &mode_attr.attr);
-    if (ret)
-        dev_warn(&pdev->dev, "failed to create mode sysfs file\n");
-
-    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &stats_attr.attr);
-    if (ret)
-        dev_warn(&pdev->dev, "failed to create stats sysfs file\n");
-
+    /* Create sysfs attributes */
+    sysfs_create_file(&gdev->misc.this_device->kobj, &sampling_ms_attr.attr);
+    sysfs_create_file(&gdev->misc.this_device->kobj, &threshold_mC_attr.attr);
+    sysfs_create_file(&gdev->misc.this_device->kobj, &mode_attr.attr);
+    sysfs_create_file(&gdev->misc.this_device->kobj, &stats_attr.attr);
 
     pr_info(DRIVER_NAME ": /dev/%s ready\n", DEV_NAME);
     return 0;
 }
 
+/* Cleanup on driver removal */
 static void nxp_simtemp_remove(struct platform_device *pdev)
 {
     struct nxp_simtemp_dev *dev = gdev;
 
     pr_info(DRIVER_NAME ": remove called\n");
 
-    /* detener timer y work */
     dev->running = false;
     hrtimer_cancel(&dev->timer);
     cancel_work_sync(&dev->work);
 
-    /* eliminar archivos sysfs */
+    /* Remove sysfs attributes */
     sysfs_remove_file(&dev->misc.this_device->kobj, &sampling_ms_attr.attr);
     sysfs_remove_file(&dev->misc.this_device->kobj, &threshold_mC_attr.attr);
     sysfs_remove_file(&dev->misc.this_device->kobj, &mode_attr.attr);
     sysfs_remove_file(&dev->misc.this_device->kobj, &stats_attr.attr);
 
-    /* desregistrar misc device */
     misc_deregister(&dev->misc);
 
-    /* liberar buffer y estructura */
     kfree(dev->buffer);
     kfree(dev);
-
     gdev = NULL;
 
     pr_info(DRIVER_NAME ": device removed\n");
 }
 
+/* ============================================================
+ *                 DRIVER REGISTRATION
+ * ============================================================ */
 
 static struct platform_driver nxp_simtemp_driver = {
     .probe  = nxp_simtemp_probe,
@@ -310,7 +340,7 @@ static struct platform_driver nxp_simtemp_driver = {
     .driver = {
         .name = DRIVER_NAME,
         .owner = THIS_MODULE,
-        .of_match_table = NULL,
+        .of_match_table = NULL,  /* No Device Tree binding used */
     },
 };
 
@@ -320,6 +350,7 @@ static int __init nxp_simtemp_init(void)
 {
     int ret;
 
+    /* Register driver and create a synthetic platform device */
     ret = platform_driver_register(&nxp_simtemp_driver);
     if (ret)
         return ret;
@@ -341,6 +372,10 @@ static void __exit nxp_simtemp_exit(void)
     platform_driver_unregister(&nxp_simtemp_driver);
     pr_info(DRIVER_NAME ": platform driver unregistered\n");
 }
+
+/* ============================================================
+ *                 MODULE METADATA
+ * ============================================================ */
 
 module_init(nxp_simtemp_init);
 module_exit(nxp_simtemp_exit);

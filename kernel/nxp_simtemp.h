@@ -13,6 +13,17 @@
 #define DRIVER_NAME "nxp_simtemp"
 #define DEV_NAME "simtemp"
 
+/* --- Modes Temp Config --- */
+#define RAMP_START_MILLIC 40000
+#define RAMP_STEP_MILLIC  100
+#define RAMP_MAX_MILLIC   44000
+
+#define NOISY_MEAN_MILLIC 40000
+#define NOISY_DELTA_MILLIC 4000   // ±
+
+#define NORMAL_MEAN_MILLIC 40000
+#define NORMAL_DELTA_MILLIC 1000  // ±
+
 /* ================== Data Structures ================== */
 
 /* Structure representing one temperature sample */

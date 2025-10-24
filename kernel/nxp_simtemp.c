@@ -96,14 +96,16 @@ static void simtemp_work_func(struct work_struct *work)
     s.timestamp_ns = ktime_to_ns(now);
 
     if (strcmp(dev->mode, "ramp") == 0) {
-        static int ramp = 40000;
-        ramp += 100; 
-        if (ramp > 44000) ramp = 40000;
+        static int ramp = RAMP_START_MILLIC;
+        ramp += RAMP_STEP_MILLIC;
+        if (ramp > RAMP_MAX_MILLIC) ramp = RAMP_START_MILLIC;
         s.temp_mC = ramp;
+
     } else if (strcmp(dev->mode, "noisy") == 0) {
-        s.temp_mC = 40000 + (get_random_u32() % 8000) - 4000;
-    } else { 
-        s.temp_mC = 40000 + (get_random_u32() % 2000) - 1000; // 39–41 °C
+        s.temp_mC = NOISY_MEAN_MILLIC + (get_random_u32() % (2 * NOISY_DELTA_MILLIC)) - NOISY_DELTA_MILLIC;
+
+    } else { // normal mode
+        s.temp_mC = NORMAL_MEAN_MILLIC + (get_random_u32() % (2 * NORMAL_DELTA_MILLIC)) - NORMAL_DELTA_MILLIC;
     }
 
     s.flags = 1;

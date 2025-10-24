@@ -95,6 +95,49 @@ def set_sampling(value):
     else:
         print("Failed to set sampling interval.")
 
+def run_test():
+    print("🚀 Running device test mode...")
+    
+    test_mode = "noisy"
+    test_threshold = 41000 
+    test_sampling = 500   
+    
+    write_sysfs(os.path.join(SYSFS_BASE, "mode"), test_mode)
+    write_sysfs(os.path.join(SYSFS_BASE, "threshold_mC"), test_threshold)
+    write_sysfs(os.path.join(SYSFS_BASE, "sampling_ms"), test_sampling)
+    
+    print(f"Mode={test_mode}, Threshold={test_threshold}, Sampling={test_sampling} ms")
+    print("Waiting for a sample to cross threshold...")
+    
+    fd = os.open(DEVICE, os.O_RDONLY | os.O_NONBLOCK)
+    poller = select.poll()
+    poller.register(fd, select.POLLIN | select.POLLPRI)
+
+    timeout = 10 
+    start = time.time()
+    success = False
+    
+    while time.time() - start < timeout:
+        events = poller.poll(1000)
+        for fd_, flag in events:
+            if flag & (select.POLLIN | select.POLLPRI):
+                data = os.read(fd, record_size)
+                if len(data) != record_size:
+                    continue
+                _, temp, flags = struct.unpack(record_fmt, data)
+                if flags & 0x2:
+                    print(f"PASS: Sample crossed threshold! Temp={temp/1000:.2f} °C")
+                    success = True
+                    break
+        if success:
+            break
+
+    if not success:
+        print("FAIL: No sample crossed threshold in time.")
+    
+    os.close(fd)
+
+
 
 def main():
     parser = argparse.ArgumentParser(description="CLI for nxp_simtemp device")
@@ -102,6 +145,8 @@ def main():
     parser.add_argument("--stats", action="store_true", help="Show stats and exit")
     parser.add_argument("--threshold", type=int, help="Set threshold in m°C")
     parser.add_argument("--sampling", type=int, help="Set sampling interval in ms")
+    parser.add_argument("--test", action="store_true", help="Run automated device test")
+
     args = parser.parse_args()
 
     # Apply settings
@@ -114,6 +159,10 @@ def main():
 
     if args.stats:
         print_stats()
+        return
+    
+    if args.test:
+        run_test()
         return
     
     # Default action: live poll

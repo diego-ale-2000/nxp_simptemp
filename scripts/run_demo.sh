@@ -11,7 +11,6 @@ echo "🚀 Inserting module..."
 sudo insmod "$KO_FILE" || { echo "❌ insmod failed"; exit 1; }
 sudo chmod 666 /dev/simtemp
 
-
 sleep 1  # give time for probe()
 
 if [ ! -e "$DEVICE" ]; then
@@ -23,10 +22,16 @@ fi
 echo "⚙️  Configuring parameters..."
 echo 500 | sudo tee "$SYSFS_DIR/sampling_ms" >/dev/null
 echo 40500 | sudo tee "$SYSFS_DIR/threshold_mC" >/dev/null
-sudo python3 "$ROOT_DIR/user/cli/main.py" --mode normal
+sudo python3 "$ROOT_DIR/user/cli/main.py" --mode normal >/dev/null
 
-echo "▶️  Running CLI test (5 seconds)..."
-timeout 5 python3 "$CLI" || echo "(CLI exited)"
+echo "📋 Current configuration:"
+echo "  sampling_ms:   $(cat "$SYSFS_DIR/sampling_ms")"
+echo "  threshold_mC:  $(cat "$SYSFS_DIR/threshold_mC")"
+echo "  mode:          $(cat "$SYSFS_DIR/mode")"
+
+echo
+echo "▶️  Running CLI test (10 seconds)..."
+timeout 10 python3 "$CLI" || echo "(CLI exited)"
 
 echo "📊 Current stats:"
 cat "$SYSFS_DIR/stats" || true

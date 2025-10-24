@@ -5,6 +5,8 @@ import select
 import struct
 import time
 import argparse
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 DEVICE = "/dev/simtemp"
 SYSFS_BASE = "/sys/class/misc/simtemp"
@@ -12,9 +14,9 @@ SYSFS_BASE = "/sys/class/misc/simtemp"
 record_fmt = "Qii"  # timestamp_ns, temp_mC, flags
 record_size = struct.calcsize(record_fmt)
 
+GDL_TZ = ZoneInfo("America/Mexico_City")  # Guadalajara timezone
 
 def read_sysfs(path):
-    """Reads a sysfs attribute as string."""
     try:
         with open(path, "r") as f:
             return f.read().strip()
@@ -24,7 +26,6 @@ def read_sysfs(path):
 
 
 def write_sysfs(path, value):
-    """Writes a string to a sysfs attribute."""
     try:
         with open(path, "w") as f:
             f.write(str(value))
@@ -67,13 +68,16 @@ def live_poll():
                     data = os.read(fd, record_size)
                     if len(data) != record_size:
                         continue
-                    ts, temp, flags = struct.unpack(record_fmt, data)
+                    ts_ns, temp, flags = struct.unpack(record_fmt, data)
                     alert = "YES" if flags & 0x2 else "NO"
-                    print(f"{time.strftime('%H:%M:%S')} | {temp/1000:.2f} °C | Threshold crossed? {alert}")
+                    
+                    now = datetime.now(GDL_TZ)
+                    print(f"{now.strftime('%Y-%m-%d %H:%M:%S')} | {temp/1000:.2f} °C | Threshold crossed? {alert}")
     except KeyboardInterrupt:
         print("\nExiting...")
     finally:
         os.close(fd)
+
 
 
 def main():

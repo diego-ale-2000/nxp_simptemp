@@ -137,3 +137,6 @@ From the project root (`~/simtemp`):
 ```
 ---
 
+## Links
+- Git repository: [https://github.com/diego-ale-2000/nxp_simptemp.git]
+- Demo video: [https://youtu.be/gBwWEoxVkeA]

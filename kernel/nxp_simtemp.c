@@ -295,10 +295,21 @@ static int nxp_simtemp_probe(struct platform_device *pdev)
     }
 
     /* Create sysfs attributes */
-    sysfs_create_file(&gdev->misc.this_device->kobj, &sampling_ms_attr.attr);
-    sysfs_create_file(&gdev->misc.this_device->kobj, &threshold_mC_attr.attr);
-    sysfs_create_file(&gdev->misc.this_device->kobj, &mode_attr.attr);
-    sysfs_create_file(&gdev->misc.this_device->kobj, &stats_attr.attr);
+    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &sampling_ms_attr.attr);
+    if (ret)
+        dev_warn(&pdev->dev, "failed to create sampling_ms sysfs file\n");
+
+    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &threshold_mC_attr.attr);
+    if (ret)
+        dev_warn(&pdev->dev, "failed to create threshold_mC sysfs file\n");
+
+    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &mode_attr.attr);
+    if (ret)
+        dev_warn(&pdev->dev, "failed to create mode sysfs file\n");
+
+    ret = sysfs_create_file(&gdev->misc.this_device->kobj, &stats_attr.attr);
+    if (ret)
+        dev_warn(&pdev->dev, "failed to create stats sysfs file\n");
 
     pr_info(DRIVER_NAME ": /dev/%s ready\n", DEV_NAME);
     return 0;
